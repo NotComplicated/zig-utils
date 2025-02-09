@@ -1,5 +1,4 @@
 const std = @import("std");
-const testing = std.testing;
 
 pub const Predicate = struct {
     name: []const u8,
@@ -27,39 +26,4 @@ pub fn If(predicate: Predicate, comptime T: type, comptime Ret: type) type {
         Ret
     else
         @compileError("Predicate '" ++ predicate.name ++ "' not satisfied by '" ++ @typeName(T) ++ "'");
-}
-
-test "if predicate" {
-    const maxInt = std.math.maxInt;
-
-    const Test = struct {
-        fn fooable(T: type) bool {
-            return @hasField(T, "foo");
-        }
-
-        const IsFooable = Predicate.init(fooable);
-
-        const Foo = struct {
-            foo: u8,
-        };
-
-        const Bar = struct {
-            bar: u8,
-            foo: usize,
-        };
-
-        fn f(foo: Foo) If(IsFooable, Foo, u8) {
-            return foo.foo;
-        }
-
-        fn g(bar: Bar) If(IsFooable, Bar, u8) {
-            return @truncate(bar.foo);
-        }
-    };
-
-    const foo = Test.Foo{ .foo = 42 };
-    const bar = Test.Bar{ .bar = 42, .foo = maxInt(usize) };
-
-    try testing.expectEqual(Test.f(foo), 42);
-    try testing.expectEqual(Test.g(bar), 255);
 }

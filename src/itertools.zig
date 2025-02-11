@@ -7,7 +7,7 @@ const type_predicates = @import("type-predicates.zig");
 const Predicate = type_predicates.Predicate;
 const If = type_predicates.If;
 
-fn isIterator(T: type) bool {
+fn isIter(T: type) bool {
     var I = T;
     if (@typeInfo(I) == .pointer) {
         I = meta.Child(I);
@@ -19,9 +19,9 @@ fn isIterator(T: type) bool {
     if (info.@"fn".params[0].type != *I) return false;
     return true;
 }
-const IsIterator = Predicate.init(isIterator);
+const IsIter = Predicate.init(isIter);
 
-fn GetItem(T: type) If(IsIterator, T, type) {
+fn GetItem(T: type) If(IsIter, T, type) {
     var I = T;
     if (@typeInfo(I) == .pointer) {
         I = meta.Child(I);
@@ -63,18 +63,55 @@ pub fn map(iter: anytype, ctx: anytype, func: anytype) Map(@TypeOf(iter), @TypeO
     };
 }
 
-pub fn Iter(Sub: type) type {
+pub fn Filter(I: type, Ctx: type, func: anytype) type {
+    const Item = GetItem(I);
+    const info = @typeInfo(@TypeOf(func));
+    if (info != .@"fn") {
+        @compileError("Filter function must be a function");
+    }
+    if (info.@"fn".params.len != 2 or info.@"fn".params[0].type != Ctx or info.@"fn".params[1].type != Item) {
+        @compileError("Filter function must take a context and an item of the iterator type");
+    }
+    if (info.@"fn".return_type.? != bool) {
+        @compileError("Filter function must return a boolean");
+    }
+
     return struct {
-        pub fn map(self: *Sub, ctx: anytype, func: anytype) Map(@TypeOf(self), @TypeOf(ctx), func) {
-            return @import("itertools.zig").map(self, ctx, func);
+        iter: I,
+        ctx: Ctx,
+
+        const Self = @This();
+
+        usingnamespace Iter(Self);
+
+        pub fn next(self: *Self) ?Item {
+            while (self.iter.next()) |item| {
+                if (func(self.ctx, item)) {
+                    return item;
+                }
+            }
+            return null;
         }
     };
 }
 
-pub fn IntoIter(T: type) If(IsIterator, T, type) {
+pub fn filter(iter: anytype, ctx: anytype, func: anytype) Filter(@TypeOf(iter), @TypeOf(ctx), func) {
+    return .{
+        .iter = iter,
+        .ctx = ctx,
+    };
+}
+
+pub fn Iter(Sub: type) type {
+    const itertools = @import("itertools.zig");
+
     return struct {
-        pub fn next(self: *T) ?GetItem(T) {
-            return self.next();
+        pub fn map(self: *Sub, ctx: anytype, func: anytype) Map(@TypeOf(self), @TypeOf(ctx), func) {
+            return itertools.map(self, ctx, func);
+        }
+
+        pub fn filter(self: *Sub, ctx: anytype, func: anytype) Filter(@TypeOf(self), @TypeOf(ctx), func) {
+            return itertools.filter(self, ctx, func);
         }
     };
 }
@@ -129,4 +166,48 @@ test "map" {
     try testing.expectEqual(17, double_mapped_range.next().?);
     try testing.expectEqual(18, double_mapped_range.next().?);
     try testing.expectEqual(null, double_mapped_range.next());
+}
+
+test "filter" {
+    const LenIsEven = struct {
+        fn lenIsEven(_: void, s: []const u8) bool {
+            return s.len % 2 == 0;
+        }
+    };
+    var filtered_split = filter(mem.splitScalar(u8, "a bb ccc", ' '), {}, LenIsEven.lenIsEven);
+
+    try testing.expectEqualStrings("bb", filtered_split.next().?);
+    try testing.expectEqual(null, filtered_split.next());
+
+    const Range = struct {
+        from: usize,
+        to: usize,
+
+        const Self = @This();
+
+        usingnamespace Iter(Self);
+
+        pub fn next(self: *Self) ?usize {
+            self.from += 1;
+            return if (self.from > self.to) null else self.from - 1;
+        }
+    };
+
+    const AddAndIsModulo = struct {
+        fn add(a: usize, b: usize) usize {
+            return a + b;
+        }
+
+        fn isModulo(a: usize, b: usize) bool {
+            return b % a == 0;
+        }
+    };
+
+    var range = Range{ .from = 0, .to = 6 };
+    var mapped_range = range.map(@as(usize, 1), AddAndIsModulo.add);
+    var filtered_mapped_range = mapped_range.filter(@as(usize, 3), AddAndIsModulo.isModulo);
+
+    try testing.expectEqual(3, filtered_mapped_range.next().?);
+    try testing.expectEqual(6, filtered_mapped_range.next().?);
+    try testing.expectEqual(null, filtered_mapped_range.next());
 }
